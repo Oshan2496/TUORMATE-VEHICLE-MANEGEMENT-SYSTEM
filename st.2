@@ -1,0 +1,926 @@
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <iomanip>
+#include <cstdlib>
+#include <limits>
+#include <sstream>
+#include <chrono>
+#include <thread>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <conio.h>
+#else
+#include <termios.h>
+#include <unistd.h>
+#endif
+
+using namespace std;
+
+// Color codes for console output
+enum color {
+    RED = 12, GREEN = 10, BLUE = 9, YELLOW = 14,
+    WHITE = 15, CYAN = 11, MAGENTA = 13, GRAY = 7
+};
+
+// Data structures
+struct vehicle {
+    int vehicleID;
+    string make;
+    string model;
+    int year;
+    string plateNumber;
+    string status; // "Available", "Rented", "Maintenance"
+    double dailyRate;
+    string driverName;
+    string driverContact;
+
+    vehicle()
+        : vehicleID(0), year(0), dailyRate(0.0),
+          make(""), model(""), plateNumber(""),
+          status("Available"), driverName(""), driverContact("") {}
+};
+
+struct sale {
+    int saleID;
+    int vehicleID;
+    string customerName;
+    string customerContact;
+    string startDate;
+    string endDate;
+    double totalAmount;
+    string paymentStatus; // e.g. "Pending", "Paid"
+
+    sale()
+        : saleID(0), vehicleID(0), customerName(""),
+          customerContact(""), startDate(""), endDate(""),
+          totalAmount(0.0), paymentStatus("Pending") {}
+};
+
+struct user {
+    string userName;
+    string password;
+    string role;
+
+    user() : userName(""), password(""), role("") {}
+    user(string u, string p, string r)
+        : userName(u), password(p), role(r) {}
+};
+
+// Global variables
+vector<vehicle> vehicles;
+vector<sale> sales;
+vector<user> users;
+string currentUser;
+string currentRole;
+
+// Function declarations
+void saveUsers();
+void loadUsers();
+void saveVehicles();
+void loadVehicles();
+void saveSales();
+void loadSales();
+
+void setColor(int c);
+void clearScreen();
+void pauseScreen();
+string getPassword();
+int getValidatedInt(const string& prompt, int minVal = 1, int maxVal = INT_MAX);
+double getValidatedDouble(const string& prompt, double minVal = 0.0);
+string getValidatedString(const string& prompt);
+
+bool authenticateUser();
+
+int getNextVehicleID();
+void addVehicle();
+void viewVehicles();
+void updateVehicle();
+void deleteVehicle();
+void vehicleManagement();
+
+int getNextSaleID();
+void addSale();
+void viewSales();
+void salesManagement();
+
+void viewCompanyInfo();
+void displayMainMenu();
+void logoutUser();
+void exitSystem();
+
+//====== Authentication =====
+
+int main() {
+    loadUsers();
+    loadVehicles();
+    loadSales();
+
+    if (!authenticateUser()) {
+        cout << "Login failed. Exiting...\n";
+        return 1;
+    }
+
+    while (true) {
+        displayMainMenu();
+        int choice = getValidatedInt("Enter your choice (1-5): ", 1, 5);
+        switch (choice) {
+        case 1:
+            vehicleManagement();
+            break;
+        case 2:
+            salesManagement();
+            break;
+        case 3:
+            viewCompanyInfo();
+            break;
+        case 4:
+            logoutUser();
+            if (!authenticateUser()) {
+                cout << "Login failed. Exiting...\n";
+                return 1;
+            }
+            break;
+        case 5:
+            exitSystem();
+            break;
+        }
+    }
+
+    return 0;
+}
+
+// ========== Utility & I/O ==========
+
+void setColor(int c) {
+#ifdef _WIN32
+    SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), c);
+#endif
+}
+
+void clearScreen() {
+#ifdef _WIN32
+    system("cls");
+#else
+    system("clear");
+#endif
+}
+
+void pauseScreen() {
+    setColor(YELLOW);
+    cout << "\nPress any key to continue...";
+    setColor(WHITE);
+#ifdef _WIN32
+    _getch();
+#else
+    cin.get();
+#endif
+}
+
+string getPassword() {
+    string password;
+#ifdef _WIN32
+    char ch;
+    while ((ch = _getch()) != '\r') {
+        if (ch == '\b') {
+            if (!password.empty()) {
+                password.pop_back();
+                cout << "\b \b";
+            }
+        } else {
+            password.push_back(ch);
+            cout << '*';
+        }
+    }
+#else
+    struct termios oldt, newt;
+    tcgetattr(STDIN_FILENO, &oldt);
+    newt = oldt;
+    newt.c_lflag &= ~ECHO;
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+    getline(cin, password);
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+#endif
+    cout << endl;
+    return password;
+}
+
+int getValidatedInt(const string& prompt, int minVal, int maxVal) {
+    int value;
+    while (true) {
+        setColor(CYAN);
+        cout << prompt;
+        setColor(WHITE);
+        if (cin >> value && value >= minVal && value <= maxVal) {
+            cin.ignore(numeric_limits<streamsize>::max(), '\n');
+            return value;
+        }
+        setColor(RED);
+        cout << "Invalid input! Please enter a number between " << minVal << " and " << maxVal << ".\n";
+        setColor(WHITE);
+        cin.clear();
+        cin.ignore(numeric_limits<streamsize>::max(), '\n');
+    }
+}
+
+double getValidatedDouble(const string& prompt, double minVal) {
+    double value;
+    while (true) {
+        setColor(CYAN);
+        cout << prompt;
+        setColor(WHITE);
+        if (cin >> value && value >= minVal) {
+            cin.ignore(numeric_limits<streamsize>::max(), '\n');
+            return value;
+        }
+        setColor(RED);
+        cout << "Invalid input! Please enter a valid amount (>= " << minVal << ").\n";
+        setColor(WHITE);
+        cin.clear();
+        cin.ignore(numeric_limits<streamsize>::max(), '\n');
+    }
+}
+
+string getValidatedString(const string& prompt) {
+    string value;
+    while (true) {
+        setColor(CYAN);
+        cout << prompt;
+        setColor(WHITE);
+        getline(cin, value);
+        if (!value.empty()) {
+            return value;
+        }
+        setColor(RED);
+        cout << "Input cannot be empty! Please try again.\n";
+        setColor(WHITE);
+    }
+}
+
+// ========== Persistence ==========
+
+void saveUsers() {
+    ofstream file("users.txt");
+    if (!file) {
+        cerr << "Error saving users file.\n";
+        return;
+    }
+    for (const auto& u : users) {
+        file << u.userName << "," << u.password << "," << u.role << "\n";
+    }
+    file.close();
+}
+
+void loadUsers() {
+    ifstream file("users.txt");
+    if (!file.is_open()) {
+        // Create default users
+        users.push_back(user("admin", "admin123", "administrator"));
+        users.push_back(user("manager", "pass123", "manager"));
+        saveUsers();
+        return;
+    }
+    users.clear();
+    string line;
+    while (getline(file, line)) {
+        if (line.empty()) continue;
+        size_t pos1 = line.find(',');
+        size_t pos2 = line.find(',', pos1 + 1);
+        if (pos1 != string::npos && pos2 != string::npos) {
+            user u;
+            u.userName = line.substr(0, pos1);
+            u.password = line.substr(pos1 + 1, pos2 - pos1 - 1);
+            u.role = line.substr(pos2 + 1);
+            users.push_back(u);
+        }
+    }
+    file.close();
+}
+
+void saveVehicles() {
+    ofstream file("vehicles.txt");
+    if (!file) {
+        cerr << "Error saving vehicles file.\n";
+        return;
+    }
+    for (const auto& v : vehicles) {
+        file << v.vehicleID << ","
+             << v.make << ","
+             << v.model << ","
+             << v.year << ","
+             << v.plateNumber << ","
+             << v.status << ","
+             << v.dailyRate << ","
+             << v.driverName << ","
+             << v.driverContact << "\n";
+    }
+    file.close();
+}
+
+void loadVehicles() {
+    ifstream file("vehicles.txt");
+    if (!file.is_open()) {
+        return;
+    }
+    vehicles.clear();
+    string line;
+    while (getline(file, line)) {
+        if (line.empty()) continue;
+        vehicle v;
+        stringstream ss(line);
+        string token;
+        if (getline(ss, token, ',')) v.vehicleID = stoi(token);
+        if (getline(ss, token, ',')) v.make = token;
+        if (getline(ss, token, ',')) v.model = token;
+        if (getline(ss, token, ',')) v.year = stoi(token);
+        if (getline(ss, token, ',')) v.plateNumber = token;
+        if (getline(ss, token, ',')) v.status = token;
+        if (getline(ss, token, ',')) v.dailyRate = stod(token);
+        if (getline(ss, token, ',')) v.driverName = token;
+        if (getline(ss, token, ',')) v.driverContact = token;
+        vehicles.push_back(v);
+    }
+    file.close();
+}
+
+void saveSales() {
+    ofstream file("sales.txt");
+    if (!file) {
+        cerr << "Error saving sales file.\n";
+        return;
+    }
+    for (const auto& s : sales) {
+        file << s.saleID << ","
+             << s.vehicleID << ","
+             << s.customerName << ","
+             << s.customerContact << ","
+             << s.startDate << ","
+             << s.endDate << ","
+             << s.totalAmount << ","
+             << s.paymentStatus << "\n";
+    }
+    file.close();
+}
+
+void loadSales() {
+    ifstream file("sales.txt");
+    if (!file.is_open()) {
+        return;
+    }
+    sales.clear();
+    string line;
+    while (getline(file, line)) {
+        if (line.empty()) continue;
+        sale s;
+        stringstream ss(line);
+        string token;
+        if (getline(ss, token, ',')) s.saleID = stoi(token);
+        if (getline(ss, token, ',')) s.vehicleID = stoi(token);
+        if (getline(ss, token, ',')) s.customerName = token;
+        if (getline(ss, token, ',')) s.customerContact = token;
+        if (getline(ss, token, ',')) s.startDate = token;
+        if (getline(ss, token, ',')) s.endDate = token;
+        if (getline(ss, token, ',')) s.totalAmount = stod(token);
+        if (getline(ss, token, ',')) s.paymentStatus = token;
+        sales.push_back(s);
+    }
+    file.close();
+}
+
+// ========== Authentication ==========
+
+bool authenticateUser() {
+    clearScreen();
+    setColor(GREEN);
+    cout << "===========================================\n";
+    cout << "            TOUR MATE LOGIN SYSTEM         \n";
+    cout << "===========================================\n";
+    setColor(WHITE);
+
+    int attempts = 3;
+    while (attempts > 0) {
+        setColor(CYAN);
+        cout << "USERNAME: ";
+        setColor(WHITE);
+        string uname;
+        getline(cin, uname);
+
+        setColor(CYAN);
+        cout << "PASSWORD: ";
+        setColor(WHITE);
+        string pwd = getPassword();
+
+        for (const auto& u : users) {
+            if (u.userName == uname && u.password == pwd) {
+                currentUser = uname;
+                currentRole = u.role;
+                setColor(GREEN);
+                cout << "Login successful! Welcome, " << uname << "!\n";
+                setColor(WHITE);
+                pauseScreen();
+                return true;
+            }
+        }
+
+        attempts--;
+        setColor(RED);
+        cout << "Invalid credentials! Attempts remaining: " << attempts << "\n";
+        setColor(WHITE);
+    }
+
+    setColor(RED);
+    cout << "Maximum login attempts exceeded. Access denied.\n";
+    setColor(WHITE);
+    return false;
+}
+
+// ========== Vehicle Management ==========
+
+int getNextVehicleID() {
+    int maxID = 0;
+    for (const auto& v : vehicles) {
+        if (v.vehicleID > maxID) {
+            maxID = v.vehicleID;
+        }
+    }
+    return maxID + 1;
+}
+
+void addVehicle() {
+    clearScreen();
+    setColor(GREEN);
+    cout << "=============================\n";
+    cout << "      ADD NEW VEHICLE        \n";
+    cout << "=============================\n";
+    setColor(WHITE);
+
+    vehicle v;
+    v.vehicleID = getNextVehicleID();
+    v.make = getValidatedString("Enter Make: ");
+    v.model = getValidatedString("Enter Model: ");
+    v.year = getValidatedInt("Enter Year (e.g. 2000-2025): ", 1900, 3000);
+    v.plateNumber = getValidatedString("Enter Plate Number: ");
+    v.status = "Available";
+    v.dailyRate = getValidatedDouble("Enter Daily Rate (Rs.): ", 0.0);
+    v.driverName = getValidatedString("Enter Driver Name: ");
+    v.driverContact = getValidatedString("Enter Driver Contact: ");
+
+    vehicles.push_back(v);
+    saveVehicles();
+
+    setColor(GREEN);
+    cout << "\nVehicle added successfully!\n";
+    setColor(WHITE);
+    pauseScreen();
+}
+
+void viewVehicles() {
+    clearScreen();
+    setColor(GREEN);
+    cout << "============================\n";
+    cout << "     VEHICLE DETAILS        \n";
+    cout << "============================\n";
+    setColor(WHITE);
+
+    if (vehicles.empty()) {
+        setColor(YELLOW);
+        cout << "No vehicles found in the system.\n";
+        setColor(WHITE);
+        pauseScreen();
+        return;
+    }
+
+    cout << left
+         << setw(5) << "ID"
+         << setw(12) << "Make"
+         << setw(12) << "Model"
+         << setw(6) << "Year"
+         << setw(12) << "Plate"
+         << setw(12) << "Status"
+         << setw(12) << "Rate"
+         << setw(15) << "Driver"
+         << "Contact\n";
+
+    setColor(CYAN);
+    cout << string(90, '-') << "\n";
+    setColor(WHITE);
+
+    for (const auto& v : vehicles) {
+        if (v.status == "Available") setColor(GREEN);
+        else if (v.status == "Rented") setColor(YELLOW);
+        else setColor(RED);
+
+        cout << left
+             << setw(5) << v.vehicleID
+             << setw(12) << v.make
+             << setw(12) << v.model
+             << setw(6) << v.year
+             << setw(12) << v.plateNumber
+             << setw(12) << v.status
+             << setw(12) << fixed << setprecision(2) << v.dailyRate
+             << setw(15) << v.driverName
+             << v.driverContact
+             << "\n";
+    }
+    setColor(WHITE);
+    pauseScreen();
+}
+
+void updateVehicle() {
+    clearScreen();
+    setColor(GREEN);
+    cout << "============================\n";
+    cout << "     UPDATE VEHICLE         \n";
+    cout << "============================\n";
+    setColor(WHITE);
+
+    int vid = getValidatedInt("Enter Vehicle ID to update: ");
+    auto it = find_if(vehicles.begin(), vehicles.end(),
+                      [vid](const vehicle& v) {
+                          return v.vehicleID == vid;
+                      });
+    if (it == vehicles.end()) {
+        setColor(RED);
+        cout << "Vehicle ID not found.\n";
+        setColor(WHITE);
+        pauseScreen();
+        return;
+    }
+
+    setColor(YELLOW);
+    cout << "\nCurrent vehicle info:\n";
+    cout << "Make: " << it->make << "\n";
+    cout << "Model: " << it->model << "\n";
+    cout << "Year: " << it->year << "\n";
+    cout << "Status: " << it->status << "\n";
+    cout << "Daily Rate: " << it->dailyRate << "\n";
+    cout << "Driver Name: " << it->driverName << "\n";
+    cout << "Driver Contact: " << it->driverContact << "\n";
+    setColor(WHITE);
+
+    cout << "\nWhich field to update?\n";
+    cout << "1. Status\n";
+    cout << "2. Daily Rate\n";
+    cout << "3. Driver Name\n";
+    cout << "4. Driver Contact\n";
+
+    int choice = getValidatedInt("Enter choice (1-4): ", 1, 4);
+    switch (choice) {
+    case 1:
+        it->status = getValidatedString("Enter new status (Available / Rented / Maintenance): ");
+        break;
+    case 2:
+        it->dailyRate = getValidatedDouble("Enter new daily rate: ", 0.0);
+        break;
+    case 3:
+        it->driverName = getValidatedString("Enter new driver name: ");
+        break;
+    case 4:
+        it->driverContact = getValidatedString("Enter new driver contact: ");
+        break;
+    }
+
+    saveVehicles();
+    setColor(GREEN);
+    cout << "Vehicle updated successfully!\n";
+    setColor(WHITE);
+    pauseScreen();
+}
+
+void deleteVehicle() {
+    clearScreen();
+    setColor(GREEN);
+    cout << "============================\n";
+    cout << "     DELETE VEHICLE         \n";
+    cout << "============================\n";
+    setColor(WHITE);
+
+    int vid = getValidatedInt("Enter Vehicle ID to delete: ");
+    auto it = find_if(vehicles.begin(), vehicles.end(),
+                      [vid](const vehicle& v) {
+                          return v.vehicleID == vid;
+                      });
+    if (it == vehicles.end()) {
+        setColor(RED);
+        cout << "Vehicle ID not found.\n";
+        setColor(WHITE);
+        pauseScreen();
+        return;
+    }
+
+    setColor(YELLOW);
+    cout << "Vehicle: " << it->make << " " << it->model
+         << " (Plate: " << it->plateNumber << ")\n";
+    setColor(RED);
+    cout << "Are you sure you want to delete this vehicle? (y/n): ";
+    setColor(WHITE);
+
+    char c;
+    cin >> c;
+    cin.ignore(numeric_limits<streamsize>::max(), '\n');
+
+    if (c == 'y' || c == 'Y') {
+        vehicles.erase(it);
+        saveVehicles();
+        setColor(GREEN);
+        cout << "Vehicle deleted.\n";
+        setColor(WHITE);
+    } else {
+        setColor(YELLOW);
+        cout << "Deletion cancelled.\n";
+        setColor(WHITE);
+    }
+    pauseScreen();
+}
+
+void vehicleManagement() {
+    while (true) {
+        clearScreen();
+        setColor(GREEN);
+        cout << "============================\n";
+        cout << "   VEHICLE MANAGEMENT MENU  \n";
+        cout << "============================\n";
+        setColor(WHITE);
+        cout << "1. View All Vehicles\n";
+        cout << "2. Add New Vehicle\n";
+        cout << "3. Update Vehicle\n";
+        cout << "4. Delete Vehicle\n";
+        cout << "5. Back to Main Menu\n";
+
+        int choice = getValidatedInt("Enter your choice (1-5): ", 1, 5);
+        switch (choice) {
+        case 1: viewVehicles(); break;
+        case 2: addVehicle(); break;
+        case 3: updateVehicle(); break;
+        case 4: deleteVehicle(); break;
+        case 5: return;
+        }
+    }
+}
+
+// ========== Sales Management ==========
+
+int getNextSaleID() {
+    int maxID = 0;
+    for (const auto& s : sales) {
+        if (s.saleID > maxID) {
+            maxID = s.saleID;
+        }
+    }
+    return maxID + 1;
+}
+
+void addSale() {
+    clearScreen();
+    setColor(GREEN);
+    cout << "============================\n";
+    cout << "       ADD NEW SALE         \n";
+    cout << "============================\n";
+    setColor(WHITE);
+
+    // List available vehicles
+    bool hasAny = false;
+    for (const auto& v : vehicles) {
+        if (v.status == "Available") {
+            if (!hasAny) {
+                setColor(CYAN);
+                cout << "Available vehicles:\n";
+                setColor(WHITE);
+            }
+            cout << "ID: " << v.vehicleID << " - "
+                 << v.make << " " << v.model << " (Rs " << v.dailyRate << "/day)\n";
+            hasAny = true;
+        }
+    }
+    if (!hasAny) {
+        setColor(RED);
+        cout << "No vehicles available for rent.\n";
+        setColor(WHITE);
+        pauseScreen();
+        return;
+    }
+
+    sale s;
+    s.saleID = getNextSaleID();
+    cout << "Sale ID (auto): " << s.saleID << "\n";
+
+    int vid = getValidatedInt("Enter the Vehicle ID: ");
+    auto vit = find_if(vehicles.begin(), vehicles.end(),
+                       [vid](const vehicle& v) {
+                           return v.vehicleID == vid && v.status == "Available";
+                       });
+    if (vit == vehicles.end()) {
+        setColor(RED);
+        cout << "Vehicle not available or not found.\n";
+        setColor(WHITE);
+        pauseScreen();
+        return;
+    }
+
+    s.vehicleID = vid;
+    s.customerName = getValidatedString("Customer Name: ");
+    s.customerContact = getValidatedString("Customer Contact: ");
+    s.startDate = getValidatedString("Start Date (DD/MM/YYYY): ");
+    s.endDate = getValidatedString("End Date (DD/MM/YYYY): ");
+    int days = getValidatedInt("Number of days: ", 1, 365);
+    s.totalAmount = days * vit ->dailyRate;
+    cout << "Total amount: Rs " << fixed << setprecision(2) << s.totalAmount << "\n";
+    s.paymentStatus = "Pending";
+
+    sales.push_back(s);
+    vit->status = "Rented";
+    saveSales();
+    saveVehicles();
+
+    setColor(GREEN);
+    cout << "Sale recorded successfully!\n";
+    setColor(WHITE);
+    pauseScreen();
+}
+
+void viewSales() {
+    clearScreen();
+    setColor(GREEN);
+    cout << "============================\n";
+    cout << "      SALES RECORDS         \n";
+    cout << "============================\n";
+    setColor(WHITE);
+
+    if (sales.empty()) {
+        setColor(YELLOW);
+        cout << "No sales records found.\n";
+        setColor(WHITE);
+        pauseScreen();
+        return;
+    }
+
+    cout << left
+         << setw(6) << "S.ID"
+         << setw(6) << "V.ID"
+         << setw(15) << "Customer"
+         << setw(12) << "Start"
+         << setw(12) << "End"
+         << setw(12) << "Amount"
+         << "Status\n";
+
+    setColor(CYAN);
+    cout << string(70, '-') << "\n";
+    setColor(WHITE);
+
+    double totalRevenue = 0;
+    for (const auto& s : sales) {
+        if (s.paymentStatus == "Paid") {
+            setColor(GREEN);
+        } else if (s.paymentStatus == "Pending") {
+            setColor(YELLOW);
+        } else {
+            setColor(RED);
+        }
+
+        cout << left
+             << setw(6) << s.saleID
+             << setw(6) << s.vehicleID
+             << setw(15) << s.customerName
+             << setw(12) << s.startDate
+             << setw(12) << s.endDate
+             << setw(12) << fixed << setprecision(2) << s.totalAmount
+             << s.paymentStatus
+             << "\n";
+
+        if (s.paymentStatus == "Paid") {
+            totalRevenue += s.totalAmount;
+        }
+    }
+
+    setColor(WHITE);
+    setColor(CYAN);
+    cout << string(70, '-') << "\n";
+    setColor(GREEN);
+    cout << "Total Revenue (Paid only): Rs " << fixed << setprecision(2) << totalRevenue << "\n";
+    setColor(WHITE);
+
+    pauseScreen();
+}
+
+void salesManagement() {
+    while (true) {
+        clearScreen();
+        setColor(GREEN);
+        cout << "============================\n";
+        cout << "     SALES MANAGEMENT       \n";
+        cout << "============================\n";
+        setColor(WHITE);
+        cout << "1. View Sales Records\n";
+        cout << "2. Add New Sale\n";
+        cout << "3. Back to Main Menu\n";
+
+        int choice = getValidatedInt("Enter choice (1-3): ", 1, 3);
+        switch (choice) {
+        case 1:
+            viewSales();
+            break;
+        case 2:
+            addSale();
+            break;
+        case 3:
+            return;
+        }
+    }
+}
+
+// ========== Company Info & Menu ==========
+
+void viewCompanyInfo() {
+    clearScreen();
+    setColor(GREEN);
+    cout << "================================\n";
+    cout << "     TOUR MATE COMPANY INFO     \n";
+    cout << "================================\n";
+    setColor(WHITE);
+
+    cout << "Company Name: TOUR MATE Cab Services\n";
+    cout << "Established: 2020\n";
+    cout << "Address: 24/6, Main Street, City Center\n";
+    cout << "Contact: +1-333-222-144\n";
+    cout << "Email: contact@tourmate.com\n";
+    cout << "Website: www.tourmate.com\n\n";
+
+    setColor(CYAN);
+    cout << "Services Offered:\n";
+    setColor(WHITE);
+    cout << "- Airport Transfers\n";
+    cout << "- City Tours\n";
+    cout << "- Corporate Transport\n";
+    cout << "- Wedding Car Rentals\n";
+    cout << "- 24/7 Taxi Services\n\n";
+
+    setColor(YELLOW);
+    cout << "Fleet Statistics:\n";
+    setColor(WHITE);
+
+    int available = 0, rented = 0, maintenance = 0;
+    for (const auto& v : vehicles) {
+        if (v.status == "Available") available++;
+        else if (v.status == "Rented") rented++;
+        else if (v.status == "Maintenance") maintenance++;
+    }
+
+    cout << "Total Vehicles: " << vehicles.size() << "\n";
+    setColor(GREEN);
+    cout << "Available: " << available << "\n";
+    setColor(YELLOW);
+    cout << "Rented: " << rented << "\n";
+    setColor(RED);
+    cout << "In Maintenance: " << maintenance << "\n";
+    setColor(WHITE);
+
+    pauseScreen();
+}
+
+void displayMainMenu() {
+    clearScreen();
+    setColor(GREEN);
+    cout << "==========================\n";
+    cout << "   TOUR MATE MANAGEMENT   \n";
+    cout << "==========================\n";
+    setColor(CYAN);
+    cout << "User: " << currentUser << " (" << currentRole << ")\n";
+    setColor(WHITE);
+    cout << "=============================\n";
+    cout << "1. Vehicle Management\n";
+    cout << "2. Sales Management\n";
+    cout << "3. Company Information\n";
+    cout << "4. Logout\n";
+    cout << "5. Exit System\n";
+    cout << "=============================\n";
+}
+
+void logoutUser() {
+    setColor(YELLOW);
+    cout << "Logging out...\n";
+    setColor(WHITE);
+    pauseScreen();
+    currentUser = "";
+    currentRole = "";
+}
+
+// ===== EXIT THE SYSTEM =====
+
+void exitSystem() {
+    clearScreen();
+    setColor(CYAN);
+    cout << "\n========================================\n";
+
+    string message = " THANK YOU FOR USING TOUR MATE ";
+    for (char c : message) {
+        cout << c << flush;
+        this_thread::sleep_for(chrono::milliseconds(80)); // animation speed
+    }
+    cout << "\n========================================\n";
+
+    setColor(WHITE);
+    exit(0);
+}
